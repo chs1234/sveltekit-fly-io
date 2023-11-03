@@ -6,6 +6,19 @@
 app = "my-sveltekit"
 primary_region = "nrt"
 
+[env]
+  DATABASE_URL = "file:/data/sqlite.db"
+
+[experimental]
+  allowed_public_ports = []
+  auto_rollback = true
+  cmd = "start.sh"
+  entrypoint = "sh"
+
+[mounts]
+  source = "data"
+  destination = "/data"
+
 [build]
 
 [http_service]

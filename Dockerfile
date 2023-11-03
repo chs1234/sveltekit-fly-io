@@ -1,50 +1,60 @@
-# syntax = docker/dockerfile:1
+# base node image
+FROM node:16-bullseye-slim as base
 
-# Adjust NODE_VERSION as desired
-ARG NODE_VERSION=16.14.2
-FROM node:${NODE_VERSION}-slim as base
+# set for base and all layer that inherit from it
+ENV NODE_ENV production
 
-LABEL fly_launch_runtime="Node.js"
-
-# Node.js app lives here
-WORKDIR /app
-
-# Set production environment
+ENV DATABASE_URL=file:/data/sqlite.db
 ENV NODE_ENV="production"
 
-# 추가된 부분 - 위치는 여기가 좋습니다.
 # Set TMDB API key at build time
 ARG TMDB_API_KEY
 ENV VITE_TMDB_API_KEY=$TMDB_API_KEY
-# 추가된 부분
 
-# Throw-away build stage to reduce size of final image
-FROM base as build
+# Install openssl for Prisma
+RUN apt-get update && apt-get install -y openssl sqlite3
 
-# Install packages needed to build node modules
-RUN apt-get update -qq && \
-    apt-get install -y build-essential pkg-config python
+# Install all node_modules, including dev dependencies
+FROM base as deps
 
-# Install node modules
-COPY --link .npmrc package-lock.json package.json ./
-RUN npm ci --include=dev
+WORKDIR /myapp
 
-# Copy application code
-COPY --link . .
+ADD package.json .npmrc ./
+RUN npm install --include=dev
 
-# Build application
-RUN npm run build
+# Setup production node_modules
+FROM base as production-deps
 
-# Remove development dependencies
+WORKDIR /myapp
+
+COPY --from=deps /myapp/node_modules /myapp/node_modules
+ADD package.json .npmrc ./
 RUN npm prune --omit=dev
 
+# Build the app
+FROM base as build
 
-# Final stage for app image
+WORKDIR /myapp
+
+COPY --from=deps /myapp/node_modules /myapp/node_modules
+
+ADD prisma .
+RUN npx prisma generate
+
+ADD . .
+RUN npm run build
+
+# Finally, build the production image with minimal footprint
 FROM base
 
-# Copy built application
-COPY --from=build /app /app
+WORKDIR /myapp
 
-# Start the server by default, this can be overwritten at runtime
-EXPOSE 3000
-CMD [ "npm", "run", "start" ]
+COPY --from=production-deps /myapp/node_modules /myapp/node_modules
+COPY --from=build /myapp/node_modules/.prisma /myapp/node_modules/.prisma
+
+COPY --from=build /myapp/build /myapp/build
+COPY --from=build /myapp/package.json /myapp/package.json
+COPY --from=build /myapp/start.sh /myapp/start.sh
+COPY --from=build /myapp/prisma /myapp/prisma
+
+ENTRYPOINT [ "./start.sh" ]
